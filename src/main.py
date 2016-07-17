@@ -9,7 +9,7 @@ hyperparameters = {"learning_rate": 0.001,
                    "n_classes": 10,
                    "dropout": 0.75}
 
-metrics = AllMetrics(Observer([NNOutputConsole(1), CostConsole()]))
+metrics = AllMetrics(Observer([MetricsConsole()]))
 
 nn = CNN(hyperparameters, Observer([metrics]))
 nn.train(mnist, hyperparameters["batch_size"], hyperparameters["training_iters"])

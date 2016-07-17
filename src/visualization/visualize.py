@@ -109,7 +109,7 @@ class PerformanceGraph:
         plt.cla()
 
 
-class CostConsole:
+class MetricsConsole:
     def __init__(self):
         n_metrics = 3
         self.perf_data = [[] for _ in range(n_metrics)]

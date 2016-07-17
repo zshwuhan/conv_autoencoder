@@ -99,7 +99,7 @@ class CNN:
             self.fc1 = tf.reshape(self.convolutions[-1], [-1, _weights['wd1'].get_shape().as_list()[0]])
 
             self.fc1 = tf.matmul(self.fc1, _weights['wd1']) + _biases['bd1']
-            self.fc1 = tf.nn.relu(self.fc1)
+            self.fc1 = tf.nn.elu(self.fc1)
             # self.fc1 = tf.sigmoid(self.fc1)
 
             self.fc1 = tf.nn.dropout(self.fc1, self.hyp_param["dropout"])

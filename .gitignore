@@ -72,3 +72,8 @@ target/
 # exclude data from source control by default
 /data/
 
+
+## end of cookiecutter ignores
+
+# path configurations for different machines
+config.json

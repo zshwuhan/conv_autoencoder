@@ -33,32 +33,32 @@ class CNN:
         with tf.name_scope("Dropout"):
             self.keep_prob = tf.placeholder(tf.float32)  # dropout (keep probability)
 
+        conv1_n_filters = 9
+        conv2_n_filters = 9
+        conv3_n_filters = 16
+        with tf.name_scope("weights"):
+            self._weights = {
+                'wc1': tf.Variable(tf.random_normal([16, 16, 1, conv1_n_filters])),
+                'wc2': tf.Variable(tf.random_normal([5, 5, conv1_n_filters, conv2_n_filters])),
+                # 'wc3': tf.Variable(tf.random_normal([5, 5, conv2_n_filters, conv3_n_filters])),
+                # fully connected, 7*7*64 inputs, 1024 outputs
+                'wd1': tf.Variable(tf.random_normal([8 * 8 * conv2_n_filters, 1024])),
+                # 1024 inputs, 10 outputs (class prediction)
+                'out': tf.Variable(tf.random_normal([1024, self.hyp_param["n_classes"]]))
+            }
+        with tf.name_scope("biases"):
+            self._biases = {
+                'bc1': tf.Variable(tf.random_normal([conv1_n_filters])),
+                'bc2': tf.Variable(tf.random_normal([conv2_n_filters])),
+                'bc3': tf.Variable(tf.random_normal([conv3_n_filters])),
+                'bd1': tf.Variable(tf.random_normal([1024])),
+                'out': tf.Variable(tf.random_normal([self.hyp_param["n_classes"]]))
+            }
+
         # Store layers weight & bias
-        conv1_n_filters = 32
-        conv2_n_filters = 16
         with tf.name_scope("CNN"):
-            with tf.name_scope("weights"):
-                weights = {
-                    # 5x5 conv, 1 input, 32 outputs
-                    'wc1': tf.Variable(tf.random_normal([5, 5, 1, conv1_n_filters])),
-                    # 5x5 conv, 32 inputs, 64 outputs
-                    'wc2': tf.Variable(tf.random_normal([5, 5, conv1_n_filters, conv2_n_filters])),
-                    # fully connected, 7*7*64 inputs, 1024 outputs
-                    'wd1': tf.Variable(tf.random_normal([7 * 7 * conv2_n_filters, 1024])),
-                    # 1024 inputs, 10 outputs (class prediction)
-                    'out': tf.Variable(tf.random_normal([1024, hyp_param["n_classes"]]))
-                }
-            with tf.name_scope("biases"):
-                biases = {
-                    'bc1': tf.Variable(tf.random_normal([conv1_n_filters])),
-                    'bc2': tf.Variable(tf.random_normal([conv2_n_filters])),
-                    'bd1': tf.Variable(tf.random_normal([1024])),
-                    'out': tf.Variable(tf.random_normal([hyp_param["n_classes"]]))
-                }
-
             self.convolutions, self.fc1 = [], None
-
-            self.output = self.compute_output(self.x, weights, biases)
+            self.output = self.compute_output(self.x, self._weights, self._biases)
 
         # Define loss and optimizer
         with tf.name_scope("Cost"):
@@ -91,8 +91,9 @@ class CNN:
         with tf.name_scope("Reshaping_and_transposing"):
             _x = tf.reshape(_x, shape=[-1, 28, 28, 1])
 
-        self.convolutions.append(self.conv_layer(_x, _weights["wc1"], _biases["bc1"], 2))
-        self.convolutions.append(self.conv_layer(self.convolutions[-1], _weights["wc2"], _biases["bc2"], 2))
+        self.convolutions.append(self.conv_layer(_x, _weights["wc1"], _biases["bc1"]))
+        self.convolutions.append(self.conv_layer(self.convolutions[-1], _weights["wc2"], _biases["bc2"]))
+        # self.convolutions.append(self.conv_layer(self.convolutions[-1], _weights["wc3"], _biases["bc3"]))
 
         # Reshape conv2 output to fit fully connected layer input
         with tf.name_scope("Fully_connected"):
@@ -100,7 +101,6 @@ class CNN:
 
             self.fc1 = tf.matmul(self.fc1, _weights['wd1']) + _biases['bd1']
             self.fc1 = tf.nn.elu(self.fc1)
-            # self.fc1 = tf.sigmoid(self.fc1)
 
             self.fc1 = tf.nn.dropout(self.fc1, self.hyp_param["dropout"])
 
@@ -108,25 +108,17 @@ class CNN:
 
         return output
 
-    def conv_layer(self, _inp, _weights, _biases, k):
+    @staticmethod
+    def conv_layer(_inp, _weights, _biases, maxpool_stride=1, k_size=3, stride=1):
         with tf.name_scope("Convolution_layer"):
-            conv = self.conv2d(_inp, _weights, _biases)
-            conv = self.maxpool2d(conv, k=k)
+            conv = tf.nn.conv2d(_inp, _weights, strides=[1, stride, stride, 1], padding='SAME')
+            conv = tf.nn.bias_add(conv, _biases)
+            conv = tf.nn.elu(conv)
+            # conv = tf.nn.max_pool(conv, ksize=[1, k_size, k_size, 1],
+            #                       strides=[1, maxpool_stride, maxpool_stride, 1], padding='SAME')
         return conv
 
-    @staticmethod
-    def conv2d(x, w, b, strides=1):
-        # Conv2D wrapper, with bias and relu activation
-        x = tf.nn.conv2d(x, w, strides=[1, strides, strides, 1], padding='SAME')
-        x = tf.nn.bias_add(x, b)
-        return tf.nn.relu(x)
-
-    @staticmethod
-    def maxpool2d(x, k=2):
-        # MaxPool2D wrapper
-        return tf.nn.max_pool(x, ksize=[1, k, k, 1], strides=[1, k, k, 1], padding='SAME')
-
-    def train(self, data, batch_size, training_iters, display_step=20):
+    def train(self, data, batch_size, training_iters, display_step=50):
         assert training_iters % batch_size == 0
 
         with tf.Session() as sess:
@@ -143,7 +135,9 @@ class CNN:
 
             self.saver.save(sess, self.model_path)
 
-    def run_function(self, model_path, fn, feed_dict):
+    def run_function(self, model_path, fn, feed_dict=None):
+        if feed_dict is None:
+            feed_dict = dict()
         with tf.Session() as sess:
             self.saver.restore(sess, model_path)
             return sess.run(fn, feed_dict=feed_dict)
@@ -155,20 +149,21 @@ class CNN:
         test_acc = self.run_function(model_path, self.accuracy, feed_dict)
         return test_acc
 
-    def plot_filter(self, layer):
-        batch_x, batch_y = mnist.train.next_batch(10)
-        one_image = batch_x[9]
-        fd = {self.x: np.reshape(one_image, [1, 784], order='F'), self.keep_prob: 1.0}
-        units = self.run_function(self.model_path, layer, fd)
+    def plot_filter(self, weights):
+        # batch_x, batch_y = mnist.train.next_batch(10)
+        # one_image = batch_x[9]
+        # fd = {self.x: np.reshape(one_image, [1, 784], order='F'), self.keep_prob: 1.0}
+        # units = self.run_function(self.model_path, layer, fd)
 
-        filters = units.shape[3]
+        weights = self.run_function(self.model_path, tf.reduce_sum(weights, 2))
+        filters = weights.shape[2]
         print("n_filters:", filters)
         plt.figure(1, figsize=(20, 20))
 
         for i in range(0, filters):
-            plt.subplot(int(np.sqrt(filters)) + 1, int(np.sqrt(filters)) + 1, i + 1)
+            plt.subplot(int(np.sqrt(filters)), int(np.sqrt(filters)), i + 1)
             plt.title('Filter ' + str(i))
-            plt.imshow(units[0, :, :, i], interpolation="nearest", cmap="gray")
+            plt.imshow(weights[:, :, i], interpolation="nearest", cmap="gray")
             frame = plt.gca()
             frame.axes.get_xaxis().set_ticks([])
             frame.axes.get_yaxis().set_ticks([])

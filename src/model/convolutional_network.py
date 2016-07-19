@@ -21,61 +21,64 @@ from src.visualization.visualize import *
 
 
 class CNN:
-    def __init__(self, hyp_param, observers=None):
+    def __init__(self, hyp_param, filter_depths=(1, 10, 10, 20), filter_sizes=(3, 3, 3, 3), observers=None):
         self.hyp_param = hyp_param
 
         self.observers = observers
 
         with tf.name_scope("X"):
             self.x = tf.placeholder(tf.float32, [None, hyp_param["n_input"]], name="X")
-        with tf.name_scope("Y"):
-            self.y = tf.placeholder(tf.float32, [None, hyp_param["n_classes"]], name="Y")
-        with tf.name_scope("Dropout"):
-            self.keep_prob = tf.placeholder(tf.float32)  # dropout (keep probability)
+            self.y = self.x
 
-        conv1_n_filters = 9
-        conv2_n_filters = 9
-        conv3_n_filters = 16
-        with tf.name_scope("weights"):
-            self._weights = {
-                'wc1': tf.Variable(tf.random_normal([16, 16, 1, conv1_n_filters])),
-                'wc2': tf.Variable(tf.random_normal([5, 5, conv1_n_filters, conv2_n_filters])),
-                # 'wc3': tf.Variable(tf.random_normal([5, 5, conv2_n_filters, conv3_n_filters])),
-                # fully connected, 7*7*64 inputs, 1024 outputs
-                'wd1': tf.Variable(tf.random_normal([8 * 8 * conv2_n_filters, 1024])),
-                # 1024 inputs, 10 outputs (class prediction)
-                'out': tf.Variable(tf.random_normal([1024, self.hyp_param["n_classes"]]))
-            }
-        with tf.name_scope("biases"):
-            self._biases = {
-                'bc1': tf.Variable(tf.random_normal([conv1_n_filters])),
-                'bc2': tf.Variable(tf.random_normal([conv2_n_filters])),
-                'bc3': tf.Variable(tf.random_normal([conv3_n_filters])),
-                'bd1': tf.Variable(tf.random_normal([1024])),
-                'out': tf.Variable(tf.random_normal([self.hyp_param["n_classes"]]))
-            }
+        encoder = []
+        shapes = []
+        with tf.name_scope("Reshaping_and_transposing"):
+            reshaped = tf.reshape(self.x, shape=[-1, 28, 28, 1])
+            self.y = tf.reshape(self.y, shape=[-1, 28, 28, 1])
+            curr_input = reshaped
+        with tf.name_scope("Autoencoder"):
+            with tf.name_scope("Encoder"):
+                for i, filter_size in enumerate(filter_sizes[1:]):
+                    n_input = curr_input.get_shape().as_list()[3]
+                    n_output = filter_depths[i]
+                    output, w = self.conv_layer(curr_input, filter_size, n_input, n_output,
+                                                name="Convolution_layer" + str(i))
+                    encoder.append(w)
+                    shapes.append(curr_input.get_shape().as_list())
+                    curr_input = output
 
-        # Store layers weight & bias
-        with tf.name_scope("CNN"):
-            self.convolutions, self.fc1 = [], None
-            self.output = self.compute_output(self.x, self._weights, self._biases)
+            with tf.name_scope("Feature_space"):
+                self.z = curr_input
+            encoder.reverse()
+            shapes.reverse()
+            with tf.name_scope("Decoder"):
+                for i, filter_size in enumerate(shapes):
+                    w = encoder[i]
+                    shape = shapes[i]
+                    output = self.deconv_layer(curr_input, w, shape, name="Deconvolution_layer" + str(i))
+                    curr_input = output
+
+        self.output = curr_input
+        self.imgsum_real = tf.image_summary("Real_image", reshaped)
+        self.imgsum_gen = tf.image_summary("Generated_image", self.output)
 
         # Define loss and optimizer
         with tf.name_scope("Cost"):
-            self.cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(self.output, self.y), name="cost")
+            self.cost = tf.reduce_mean(tf.square(self.output - self.y), name="cost")
             tf.scalar_summary('cost', self.cost)
         with tf.name_scope("Optimizer"):
             self.optimizer = tf.train.AdamOptimizer(learning_rate=hyp_param["learning_rate"]).minimize(self.cost)
 
-        with tf.name_scope("Evaluation"):
-            with tf.name_scope("Correct_prediction"):
-                self.output_softmax = tf.nn.softmax(self.output, name="softmax")
-                self.prediction = tf.argmax(self.output_softmax, 1, name="max_value")
-                self.correct_pred = tf.equal(self.prediction, tf.argmax(self.y, 1),
-                                             name="correct_prediction")
-            with tf.name_scope("Accuracy"):
-                self.accuracy = tf.reduce_mean(tf.cast(self.correct_pred, tf.float32), name="accuracy")
-                tf.scalar_summary("accuracy", self.accuracy)
+        # with tf.name_scope("Evaluation"):
+        #     with tf.name_scope("Correct_prediction"):
+        #         self.output_softmax = tf.nn.softmax(self.output, name="softmax")
+        #         self.prediction = tf.argmax(self.output_softmax, 1, name="max_value")
+        #         self.correct_pred = tf.equal(self.prediction, tf.argmax(self.y, 1),
+        #                                      name="correct_prediction")
+        #     with tf.name_scope("Accuracy"):
+        #         self.accuracy = tf.reduce_mean(tf.cast(self.correct_pred, tf.float32), name="accuracy")
+        #         tf.scalar_summary("accuracy", self.accuracy)
+        # self.accuracy = -1
 
         self.train_writer = None
         self.merged = None
@@ -87,38 +90,30 @@ class CNN:
         self.saver = tf.train.Saver()
         self.model_path = self.tb_path + ".tmp"
 
-    def compute_output(self, _x, _weights, _biases):
-        with tf.name_scope("Reshaping_and_transposing"):
-            _x = tf.reshape(_x, shape=[-1, 28, 28, 1])
-
-        self.convolutions.append(self.conv_layer(_x, _weights["wc1"], _biases["bc1"]))
-        self.convolutions.append(self.conv_layer(self.convolutions[-1], _weights["wc2"], _biases["bc2"]))
-        # self.convolutions.append(self.conv_layer(self.convolutions[-1], _weights["wc3"], _biases["bc3"]))
-
-        # Reshape conv2 output to fit fully connected layer input
-        with tf.name_scope("Fully_connected"):
-            self.fc1 = tf.reshape(self.convolutions[-1], [-1, _weights['wd1'].get_shape().as_list()[0]])
-
-            self.fc1 = tf.matmul(self.fc1, _weights['wd1']) + _biases['bd1']
-            self.fc1 = tf.nn.elu(self.fc1)
-
-            self.fc1 = tf.nn.dropout(self.fc1, self.hyp_param["dropout"])
-
-            output = tf.matmul(self.fc1, _weights['out']) + _biases['out']
-
-        return output
+    @staticmethod
+    def conv_layer(_inp, filter_size, n_input, n_output, name="Convolution_layer", stride=2):
+        with tf.variable_scope(name):
+            w = tf.get_variable("weights", [filter_size, filter_size, n_input, n_output],
+                                initializer=tf.truncated_normal_initializer())
+            b = tf.Variable(tf.constant(0.0, shape=[n_output], dtype=tf.float32),
+                            trainable=True, name='biases')
+            conv = tf.nn.conv2d(_inp, w, strides=[1, stride, stride, 1], padding='SAME')
+            conv = tf.nn.bias_add(conv, b)
+            conv = tf.nn.elu(conv)
+        return conv, w
 
     @staticmethod
-    def conv_layer(_inp, _weights, _biases, maxpool_stride=1, k_size=3, stride=1):
-        with tf.name_scope("Convolution_layer"):
-            conv = tf.nn.conv2d(_inp, _weights, strides=[1, stride, stride, 1], padding='SAME')
-            conv = tf.nn.bias_add(conv, _biases)
-            conv = tf.nn.elu(conv)
-            # conv = tf.nn.max_pool(conv, ksize=[1, k_size, k_size, 1],
-            #                       strides=[1, maxpool_stride, maxpool_stride, 1], padding='SAME')
-        return conv
+    def deconv_layer(_inp, w, shape, name="Deconvolution_layer", stride=2):
+        with tf.name_scope(name):
+            b = tf.Variable(tf.zeros([w.get_shape().as_list()[2]]))
+            output_shape = tf.pack([tf.shape(_inp)[0], shape[1], shape[2], shape[3]])
+            deconv = tf.nn.conv2d_transpose(_inp, w, output_shape=output_shape, strides=[1, stride, stride, 1],
+                                            padding="SAME")
+            deconv = tf.nn.bias_add(deconv, b)
+            deconv = tf.nn.elu(deconv)
+        return deconv
 
-    def train(self, data, batch_size, training_iters, display_step=50):
+    def train(self, data, batch_size, training_iters, display_step=2000):
         assert training_iters % batch_size == 0
 
         with tf.Session() as sess:
@@ -128,9 +123,9 @@ class CNN:
 
             for step in range(int(training_iters / batch_size)):
                 batch_x, batch_y = data.train.next_batch(batch_size)
-                self.feed_dict = {self.x: batch_x, self.y: batch_y, self.keep_prob: self.hyp_param["dropout"]}
+                self.feed_dict = {self.x: batch_x}
                 sess.run(self.optimizer, feed_dict=self.feed_dict)
-                if step % display_step == 0:
+                if step % display_step == 0 and self.observers is not None:
                     self.observers.notify(self, sess=sess, data=data, step=step)
 
             self.saver.save(sess, self.model_path)

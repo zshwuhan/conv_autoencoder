@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import seaborn as sns
+import tensorflow as tf
 
 from src.model.utils import *
 
@@ -28,19 +29,31 @@ class AllMetrics:
         data = kwargs["data"]
         step = kwargs["step"]
 
-        summary, train_acc, train_loss = sess.run([nn.merged, nn.accuracy, nn.cost],
-                                                  feed_dict=nn.feed_dict)
-        # is it necessary to run rez after the above metrics?
-        rez = sess.run(nn.output_softmax, feed_dict=nn.feed_dict)
+        # summary, train_acc, train_loss = sess.run([nn.merged, nn.accuracy, nn.cost],
+        #                                           feed_dict=nn.feed_dict)
+        nn.imgsum_gen = tf.image_summary("Generated_image" + str(step), nn.output)
+        summary, train_loss, _, _ = sess.run([nn.merged, nn.cost, nn.imgsum_real, nn.imgsum_gen], feed_dict=nn.feed_dict)
+        train_acc = -1
         nn.train_writer.add_summary(summary, step)
+        rez, test_batch_size = -1, -1
 
-        test_batch_size = 100
-        batch_x, batch_y = data.train.next_batch(test_batch_size)
-        feed_dict = {nn.x: batch_x, nn.y: batch_y, nn.keep_prob: 1}
-        test_acc = sess.run(nn.accuracy, feed_dict=feed_dict)
-
-        plot_data = [train_loss, train_acc, test_acc]
+        plot_data = [train_loss, -1, -1]
         self.observers.notify(nn, rez=rez, display_step=step, batch_size=test_batch_size, plot_data=plot_data)
+
+    def plotimg(self, nn, *args, **kwargs):
+        sess = kwargs["sess"]
+        data = kwargs["data"]
+        step = kwargs["step"]
+        ind = kwargs["ind"]
+        slika = sess.run(nn.output, feed_dict=nn.feed_dict)
+        img = slika[ind, :, :, 0]
+        fig, ax = plt.subplots()
+        ax.imshow(img)
+        fig.show()
+        plt.draw()
+        plt.show()
+        plt.waitforbuttonpress()
+
 
 
 class PerformanceGraph:
@@ -118,7 +131,7 @@ class MetricsConsole:
         step = kwargs["display_step"]
         batch_size = kwargs["batch_size"]
         for i, data in enumerate(self.perf_data):
-            data.append(kwargs["plot_data"][i])
+            data.append(kwargs.get("plot_data", -1)[i])
         print("Step " + str(step) + " Iter " + str(step * batch_size) +
               ", Train Loss= " + "{:.5f}".format(self.perf_data[0][-1]) +
               ", Train Accuracy= " + "{:.5f}".format(self.perf_data[1][-1]) +

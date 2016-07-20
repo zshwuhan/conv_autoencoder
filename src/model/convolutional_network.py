@@ -20,65 +20,69 @@ from src.model.utils import *
 from src.visualization.visualize import *
 
 
-class CNN:
-    def __init__(self, hyp_param, filter_depths=(1, 10, 10, 20), filter_sizes=(3, 3, 3, 3), observers=None):
+class DCGAAE:
+    def __init__(self, hyp_param, filter_depths=(5, 10, 15), filter_sizes=(3, 3, 3),
+                 observers=None):
         self.hyp_param = hyp_param
 
         self.observers = observers
 
         with tf.name_scope("X"):
-            self.x = tf.placeholder(tf.float32, [None, hyp_param["n_input"]], name="X")
-            self.y = self.x
+            self.x_reshaped = tf.placeholder(tf.float32, [None, hyp_param["n_input"]], name="X")
 
-        encoder = []
-        shapes = []
         with tf.name_scope("Reshaping_and_transposing"):
-            reshaped = tf.reshape(self.x, shape=[-1, 28, 28, 1])
-            self.y = tf.reshape(self.y, shape=[-1, 28, 28, 1])
-            curr_input = reshaped
-        with tf.name_scope("Autoencoder"):
-            with tf.name_scope("Encoder"):
-                for i, filter_size in enumerate(filter_sizes[1:]):
-                    n_input = curr_input.get_shape().as_list()[3]
-                    n_output = filter_depths[i]
-                    output, w = self.conv_layer(curr_input, filter_size, n_input, n_output,
-                                                name="Convolution_layer" + str(i))
-                    encoder.append(w)
-                    shapes.append(curr_input.get_shape().as_list())
-                    curr_input = output
+            self.x = tf.reshape(self.x_reshaped, shape=[-1, 28, 28, 1])
+            curr_input = self.x
 
-            with tf.name_scope("Feature_space"):
-                self.z = curr_input
-            encoder.reverse()
-            shapes.reverse()
-            with tf.name_scope("Decoder"):
-                for i, filter_size in enumerate(shapes):
-                    w = encoder[i]
-                    shape = shapes[i]
-                    output = self.deconv_layer(curr_input, w, shape, name="Deconvolution_layer" + str(i))
-                    curr_input = output
+        self.gen_output, self.z = self.autoencoder(curr_input, filter_depths, filter_sizes)
 
-        self.output = curr_input
-        self.imgsum_real = tf.image_summary("Real_image", reshaped)
-        self.imgsum_gen = tf.image_summary("Generated_image", self.output)
+        discr_filter_depths = (2, 4, 8, 16, 32)
+        filter_sizes = (3, 3, 3, 3, 2)
+        self.discr_on_gen = self.discriminator(self.gen_output, filter_depths=discr_filter_depths,
+                                               filter_sizes=filter_sizes)
+
+        self.discr_on_real = self.discriminator(self.x, filter_depths=discr_filter_depths,
+                                                filter_sizes=filter_sizes, reuse=True)
 
         # Define loss and optimizer
-        with tf.name_scope("Cost"):
-            self.cost = tf.reduce_mean(tf.square(self.output - self.y), name="cost")
-            tf.scalar_summary('cost', self.cost)
-        with tf.name_scope("Optimizer"):
-            self.optimizer = tf.train.AdamOptimizer(learning_rate=hyp_param["learning_rate"]).minimize(self.cost)
+        with tf.name_scope("Generator_loss"):
+            self.reconstr_loss = tf.reduce_mean(tf.square(self.gen_output - self.x),
+                                                name="Reconstruction_loss")
+            # training the generator on generated images
+            self.tgen_genimages = -tf.reduce_mean(tf.log(self.discr_on_gen + 1e-12))
 
-        # with tf.name_scope("Evaluation"):
-        #     with tf.name_scope("Correct_prediction"):
-        #         self.output_softmax = tf.nn.softmax(self.output, name="softmax")
-        #         self.prediction = tf.argmax(self.output_softmax, 1, name="max_value")
-        #         self.correct_pred = tf.equal(self.prediction, tf.argmax(self.y, 1),
-        #                                      name="correct_prediction")
-        #     with tf.name_scope("Accuracy"):
-        #         self.accuracy = tf.reduce_mean(tf.cast(self.correct_pred, tf.float32), name="accuracy")
-        #         tf.scalar_summary("accuracy", self.accuracy)
-        # self.accuracy = -1
+            # total loss for the generator training
+            self.gen_loss = self.reconstr_loss + self.tgen_genimages
+            tf.scalar_summary("generator_loss_total", self.gen_loss)
+            tf.scalar_summary("generator_loss_reconstruction", self.reconstr_loss)
+            tf.scalar_summary("generator_loss_generated", self.tgen_genimages)
+
+        with tf.name_scope("Discriminator_loss"):
+            # training the discriminator on real images
+            self.tdiscr_realimages = -tf.reduce_mean(tf.log(self.discr_on_real + 1e-12))
+            # training the discriminator on generated images, we want the discriminator to recognize the generated
+            # images
+            self.tdiscr_genimages = -tf.reduce_mean(tf.log(1 - self.discr_on_gen + 1e-12))
+            # total loss for the discriminator training
+            self.discr_loss = self.tdiscr_genimages + self.tdiscr_realimages
+            tf.scalar_summary("discrimination_loss_total", self.discr_loss)
+            tf.scalar_summary("discrimination_loss_generated", self.tdiscr_genimages)
+            tf.scalar_summary("discrimination_loss_real", self.tdiscr_realimages)
+
+        d_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "Discriminator")
+        g_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "Autoencoder")
+
+        with tf.name_scope("Optimizers"):
+            self.gen_optim = tf.train.AdamOptimizer(learning_rate=hyp_param["learning_rate"]).minimize(
+                self.gen_loss,
+                var_list=g_vars)
+            self.discr_optim = tf.train.AdamOptimizer(learning_rate=hyp_param["learning_rate"]).minimize(
+                self.discr_loss, var_list=d_vars)
+
+        self.imgsum_real = tf.image_summary("Real_image", self.x)
+        self.imgsum_gen = tf.image_summary("Generated_image", self.gen_output)
+        for var in tf.trainable_variables():
+            tf.histogram_summary(var.op.name, var)
 
         self.train_writer = None
         self.merged = None
@@ -89,6 +93,51 @@ class CNN:
 
         self.saver = tf.train.Saver()
         self.model_path = self.tb_path + ".tmp"
+
+    def discriminator(self, curr_input, filter_depths, filter_sizes, reuse=None):
+        with tf.variable_scope("Discriminator", reuse=reuse):
+            for i, filter_size in enumerate(filter_sizes):
+                n_input = curr_input.get_shape().as_list()[3]
+                n_output = filter_depths[i]
+                output, w = self.conv_layer(curr_input, filter_size, n_input, n_output,
+                                            name="Convolution_layer" + str(i), stride=2)
+                curr_input = output
+
+            with tf.variable_scope("Linear"):
+                n_input = curr_input.get_shape().as_list()[3]
+                w = tf.get_variable("Matrix", [n_input, 1], tf.float32,
+                                    tf.random_normal_initializer())
+                b = tf.get_variable("Bias", [1], initializer=tf.constant_initializer())
+                curr_input = tf.reshape(curr_input, shape=[-1, filter_depths[-1]])
+                output = tf.nn.sigmoid(tf.matmul(curr_input, w) + b)
+
+            return output
+
+    def autoencoder(self, curr_input, filter_depths, filter_sizes):
+        encoder = []
+        shapes = []
+        with tf.variable_scope("Autoencoder"):
+            with tf.name_scope("Encoder"):
+                for i, filter_size in enumerate(filter_sizes):
+                    n_input = curr_input.get_shape().as_list()[3]
+                    n_output = filter_depths[i]
+                    output, w = self.conv_layer(curr_input, filter_size, n_input, n_output,
+                                                name="Convolution_layer" + str(i))
+                    encoder.append(w)
+                    shapes.append(curr_input.get_shape().as_list())
+                    curr_input = output
+
+            with tf.name_scope("Feature_space"):
+                z = curr_input
+            encoder.reverse()
+            shapes.reverse()
+            with tf.name_scope("Decoder"):
+                for i, filter_size in enumerate(shapes):
+                    w = encoder[i]
+                    shape = shapes[i]
+                    output = self.deconv_layer(curr_input, w, shape, name="Deconvolution_layer" + str(i))
+                    curr_input = output
+        return tf.nn.sigmoid(curr_input), z
 
     @staticmethod
     def conv_layer(_inp, filter_size, n_input, n_output, name="Convolution_layer", stride=2):
@@ -105,7 +154,7 @@ class CNN:
     @staticmethod
     def deconv_layer(_inp, w, shape, name="Deconvolution_layer", stride=2):
         with tf.name_scope(name):
-            b = tf.Variable(tf.zeros([w.get_shape().as_list()[2]]))
+            b = tf.Variable(tf.zeros([w.get_shape().as_list()[2]]), name="biass")
             output_shape = tf.pack([tf.shape(_inp)[0], shape[1], shape[2], shape[3]])
             deconv = tf.nn.conv2d_transpose(_inp, w, output_shape=output_shape, strides=[1, stride, stride, 1],
                                             padding="SAME")
@@ -113,7 +162,7 @@ class CNN:
             deconv = tf.nn.elu(deconv)
         return deconv
 
-    def train(self, data, batch_size, training_iters, display_step=2000):
+    def train(self, data, batch_size, training_iters, display_step=100):
         assert training_iters % batch_size == 0
 
         with tf.Session() as sess:
@@ -121,10 +170,18 @@ class CNN:
             self.train_writer = tf.train.SummaryWriter(os.path.join(self.tb_path, "train"), sess.graph)
             sess.run(tf.initialize_all_variables())
 
+            discr_better = True
+
             for step in range(int(training_iters / batch_size)):
                 batch_x, batch_y = data.train.next_batch(batch_size)
-                self.feed_dict = {self.x: batch_x}
-                sess.run(self.optimizer, feed_dict=self.feed_dict)
+                self.feed_dict = {self.x_reshaped: batch_x}
+                if not discr_better:
+                    sess.run(self.discr_optim, feed_dict=self.feed_dict)
+                else:
+                    sess.run(self.gen_optim, feed_dict=self.feed_dict)
+                discr_loss, gen_loss = sess.run([self.discr_loss, self.gen_loss], feed_dict=self.feed_dict)
+                discr_better = tf.less(discr_loss, gen_loss).eval()
+
                 if step % display_step == 0 and self.observers is not None:
                     self.observers.notify(self, sess=sess, data=data, step=step)
 
@@ -140,8 +197,8 @@ class CNN:
     def test(self, data, batch_size, model_path):
         test_data = data.test.images[:batch_size]
         test_label = data.test.labels[:batch_size]
-        feed_dict = {self.x: test_data, self.y: test_label, self.keep_prob: 1}
-        test_acc = self.run_function(model_path, self.accuracy, feed_dict)
+        feed_dict = {self.x_reshaped: test_data}
+        test_acc = self.run_function(model_path, feed_dict)
         return test_acc
 
     def plot_filter(self, weights):

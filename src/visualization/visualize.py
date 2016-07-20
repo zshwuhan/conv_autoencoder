@@ -23,21 +23,39 @@ class Observer:
 class AllMetrics:
     def __init__(self, observers=None):
         self.observers = observers
+        self.fig, self.ax = plt.subplots(2)
+        self.fig.show()
 
     def update(self, nn, *args, **kwargs):
         sess = kwargs["sess"]
         data = kwargs["data"]
         step = kwargs["step"]
 
-        # summary, train_acc, train_loss = sess.run([nn.merged, nn.accuracy, nn.cost],
+        # summary, train_acc, gen_loss = sess.run([nn.merged, nn.accuracy, nn.cost],
         #                                           feed_dict=nn.feed_dict)
-        nn.imgsum_gen = tf.image_summary("Generated_image" + str(step), nn.output)
-        summary, train_loss, _, _ = sess.run([nn.merged, nn.cost, nn.imgsum_real, nn.imgsum_gen], feed_dict=nn.feed_dict)
+        nn.imgsum_gen = tf.image_summary("Generated_image" + str(step), nn.gen_output)
+        summary, gen_loss, discr_loss, _, _ = sess.run(
+            [nn.merged, nn.gen_loss, nn.discr_loss, nn.imgsum_real, nn.imgsum_gen],
+            feed_dict=nn.feed_dict)
         train_acc = -1
         nn.train_writer.add_summary(summary, step)
-        rez, test_batch_size = -1, -1
+        rez, test_batch_size = -1, nn.hyp_param["batch_size"]
 
-        plot_data = [train_loss, -1, -1]
+        ind = 1
+        gen, real, doutput_gen, doutput_real = sess.run([nn.gen_output, nn.x, nn.discr_on_gen, nn.discr_on_real],
+                                                        feed_dict=nn.feed_dict)
+        gen_img = gen[ind, :, :, 0]
+        real_img = real[ind, :, :, 0]
+        self.fig.canvas.draw_idle()
+        plt.pause(0.0001)
+        # plt.draw()
+        # plt.show()
+        self.ax[0].imshow(gen_img)
+        self.ax[1].imshow(real_img)
+        # plt.waitforbuttonpress()
+        print("Output of the generator, generated:", doutput_gen[ind], "           real:", doutput_real[ind])
+
+        plot_data = [gen_loss, discr_loss, discr_loss < gen_loss]
         self.observers.notify(nn, rez=rez, display_step=step, batch_size=test_batch_size, plot_data=plot_data)
 
     def plotimg(self, nn, *args, **kwargs):
@@ -45,7 +63,7 @@ class AllMetrics:
         data = kwargs["data"]
         step = kwargs["step"]
         ind = kwargs["ind"]
-        slika = sess.run(nn.output, feed_dict=nn.feed_dict)
+        slika = sess.run(nn.gen_output, feed_dict=nn.feed_dict)
         img = slika[ind, :, :, 0]
         fig, ax = plt.subplots()
         ax.imshow(img)
@@ -53,7 +71,6 @@ class AllMetrics:
         plt.draw()
         plt.show()
         plt.waitforbuttonpress()
-
 
 
 class PerformanceGraph:
@@ -133,17 +150,19 @@ class MetricsConsole:
         for i, data in enumerate(self.perf_data):
             data.append(kwargs.get("plot_data", -1)[i])
         print("Step " + str(step) + " Iter " + str(step * batch_size) +
-              ", Train Loss= " + "{:.5f}".format(self.perf_data[0][-1]) +
-              ", Train Accuracy= " + "{:.5f}".format(self.perf_data[1][-1]) +
-              ", Test Accuracy= " + "{:.5f}".format(self.perf_data[2][-1]))
+              ", Gen Loss= " + "{:.5f}".format(self.perf_data[0][-1]),
+              ", Discr Loss= {:.5f}".format(self.perf_data[1][-1]), end=" ")
+        if self.perf_data[0][-1] > self.perf_data[1][-1]:
+            print("Generator")
+        else:
+            print("Discriminator")
 
+    class NNOutputConsole:
+        def __init__(self, koliko):
+            self.rez_list = []
+            self.koliko = koliko
 
-class NNOutputConsole:
-    def __init__(self, koliko):
-        self.rez_list = []
-        self.koliko = koliko
-
-    def update(self, nn, *args, **kwargs):
-        self.rez_list.append(kwargs["rez"])
-        print("Network output:\n", self.rez_list[-1][:self.koliko])
-        print("---------\n")
+        def update(self, nn, *args, **kwargs):
+            self.rez_list.append(kwargs["rez"])
+            print("Network output:\n", self.rez_list[-1][:self.koliko])
+            print("---------\n")

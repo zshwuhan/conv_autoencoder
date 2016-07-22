@@ -5,6 +5,7 @@ import tensorflow as tf
 from src.model.utils import *
 
 
+sns.set_style("whitegrid", {'axes.grid' : False})
 class Observer:
     def __init__(self, observers):
         self.observers = [i for i in observers]
@@ -23,7 +24,8 @@ class Observer:
 class AllMetrics:
     def __init__(self, observers=None):
         self.observers = observers
-        self.fig, self.ax = plt.subplots(2)
+        self.n_examples = 5
+        self.fig, self.ax = plt.subplots(2, self.n_examples)
         self.fig.show()
 
     def update(self, nn, *args, **kwargs):
@@ -44,16 +46,17 @@ class AllMetrics:
         ind = 1
         gen, real, doutput_gen, doutput_real = sess.run([nn.gen_output, nn.x, nn.discr_on_gen, nn.discr_on_real],
                                                         feed_dict=nn.feed_dict)
-        gen_img = gen[ind, :, :, 0]
-        real_img = real[ind, :, :, 0]
+        gen_img = gen / 2 + 0.5
+        real_img = real / 2 + 0.5
         self.fig.canvas.draw_idle()
         plt.pause(0.0001)
         # plt.draw()
         # plt.show()
-        self.ax[0].imshow(gen_img)
-        self.ax[1].imshow(real_img)
+        for i in range(self.n_examples):
+            self.ax[0][i].imshow(gen_img[ind + i])
+            self.ax[1][i].imshow(real_img[ind + i])
         # plt.waitforbuttonpress()
-        print("Output of the generator, generated:", doutput_gen[ind], "           real:", doutput_real[ind])
+        print("Output of the generator, generated:", doutput_gen[ind], "    real:", doutput_real[ind])
 
         plot_data = [gen_loss, discr_loss, discr_loss < gen_loss]
         self.observers.notify(nn, rez=rez, display_step=step, batch_size=test_batch_size, plot_data=plot_data)
@@ -64,7 +67,7 @@ class AllMetrics:
         step = kwargs["step"]
         ind = kwargs["ind"]
         slika = sess.run(nn.gen_output, feed_dict=nn.feed_dict)
-        img = slika[ind, :, :, 0]
+        img = slika[ind, :, :, :]
         fig, ax = plt.subplots()
         ax.imshow(img)
         fig.show()

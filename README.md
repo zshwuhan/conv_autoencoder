@@ -1,7 +1,7 @@
 conv
 ==============================
 
-Playing with convolutional neural networks
+Playing with (de)convolutional neural networks
 
 Project Organization
 ------------

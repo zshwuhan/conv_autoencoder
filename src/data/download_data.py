@@ -1,6 +1,6 @@
 """
 
-bgavran3: Modification of the following: https://github.com/carpedm20/DCGAN-tensorflow
+Modification of the following: https://github.com/carpedm20/DCGAN-tensorflow
 
 Downloads the following:
 - Celeb-A dataset

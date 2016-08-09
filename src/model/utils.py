@@ -1,16 +1,17 @@
-import os
-import json
 import scipy.misc
 import numpy as np
 import tensorflow as tf
 
 
+def lrelu(x, leak=0.2):
+    with tf.variable_scope("leaky_relu"):
+        f1 = 0.5 * (1 + leak)
+        f2 = 0.5 * (1 - leak)
+        return f1 * x + f2 * abs(x)
+
+
 def get_image(image_path, image_size, is_crop=True):
     img = transform(imread(image_path), image_size, is_crop)
-    # box_size = 10
-    # x = np.random.randint(0, 64 - 10)
-    # y = np.random.randint(0, 64 - 10)
-    # img[x:x + box_size, y:y + box_size, :] = 0
     return img
 
 
@@ -37,31 +38,51 @@ def imread(path):
     return scipy.misc.imread(path).astype(np.float)
 
 
-class DataPath:
-    base = json.loads(open("../config.json").read()).get("path", "")
-    celeb_path = "/home/bgavran3/petnica/src/model/downloaded_examples/DCGAN_tensorflow/data/celebA"
-    pass
+def normalize(image):
+    return image / 2 + 0.5
 
 
-class Data:
-    def next_batch(self, batch_size):
-        raise NotImplementedError()
+def save_image(fig, folder_path, image_name, dpi=100):
+    import os
+    import matplotlib.pyplot as plt
+
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+    fig.savefig(os.path.join(folder_path, image_name), dpi=dpi, bbox_inches="tight")
+    print("Saved figure " + image_name + ".")
+    plt.cla()
 
 
-class CelebDataset(Data):
-    image_size = 108
+class ImageCorruption:
+    @staticmethod
+    def noise(x):
+        return tf.mul(x, tf.cast(tf.random_uniform(shape=tf.shape(x),
+                                                   minval=0,
+                                                   maxval=2,
+                                                   dtype=tf.int32), tf.float32))
 
-    def __init__(self):
-        self.f = []
-        for (dirpath, dirnames, filenames) in os.walk(DataPath.celeb_path):
-            self.f.extend(filenames)
-        self.total_size = len(self.f)
-        self.curr_batch_index = 0
+    @staticmethod
+    def box(x, box_size=20):
+        x_shape = x.get_shape().as_list()
 
-    def next_batch(self, batch_size):
-        if self.curr_batch_index * batch_size >= self.total_size - batch_size:
-            self.curr_batch_index = 0
-        img_names = self.f[self.curr_batch_index * batch_size:(self.curr_batch_index + 1) * batch_size]
-        self.curr_batch_index += 1
-        return [get_image(os.path.join(DataPath.celeb_path, img_name), CelebDataset.image_size) for img_name in
-                img_names], [-1 for _ in img_names]
+        rx = np.random.randint(0, x_shape[1] - box_size)
+        ry = np.random.randint(0, x_shape[2] - box_size)
+        # rx = tf.random_uniform(shape=1, maxval=x_shape[1] - box_size, dtype=tf.int32)
+        # ry = tf.random_uniform(shape=1, maxval=x_shape[2] - box_size, dtype=tf.int32)
+
+        # hack to implement masking because tf doesn't allow padding with constants other than zeros
+        zeros = tf.zeros((box_size, box_size, 3))
+        ones = tf.ones((box_size, box_size, 3))
+        rez = zeros - ones
+        mask_minus_one = tf.image.pad_to_bounding_box(rez, rx, ry, x_shape[1], x_shape[2])
+        mask = mask_minus_one + tf.ones_like(mask_minus_one)
+
+        # mask = np.ones((x_shape[1], x_shape[2]))
+        # mask[rx:rx + box_size, ry: ry + box_size] = 0
+        #
+        # indices = np.where(mask == 0)
+        # indices = np.array([(x, y) for x, y in zip(indices[0], indices[1])])
+        # sparse = tf.SparseTensor(indices, np.zeros_like(indices[:, 0]), shape=[x_shape[1], x_shape[2]])
+        # dense = tf.sparse_tensor_to_dense(sparse, default_value=1)
+        # dense_rgb = tf.transpose(tf.pack([mas, dense, dense]), perm=[1, 2, 0])
+        return tf.mul(x, tf.cast(mask, tf.float32))
